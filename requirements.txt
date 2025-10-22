@@ -1,4 +1,11 @@
-﻿absl-py==2.3.1
+﻿streamlit
+tensorflow
+numpy
+scikit-learn
+joblib
+
+
+absl-py==2.3.1
 astunparse==1.6.3
 certifi==2025.8.3
 charset-normalizer==3.4.3
