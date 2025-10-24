@@ -4,27 +4,62 @@ import tensorflow as tf
 import joblib
 import numpy as np
 import os
+import sqlite3
+import hashlib
 
 # ---------------------------
-# 1. Doctor Login
+# 0. DATABASE SETUP
 # ---------------------------
-users = {
-    "doctor1": "password123",
-    "doctor2": "securepass"
-}
+DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
 
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL
+    )
+    ''')
+    conn.commit()
+    conn.close()
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def create_user(username, password):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO users (username, password) VALUES (?, ?)",
+                  (username, hash_password(password)))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+def authenticate_user(username, password):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT password FROM users WHERE username = ?", (username,))
+    data = c.fetchone()
+    conn.close()
+    if data and data[0] == hash_password(password):
+        return True
+    return False
+
+init_db()
+
+# ---------------------------
+# 1. Session State for Login
+# ---------------------------
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 if 'username' not in st.session_state:
     st.session_state['username'] = ""
-
-def login(username, password):
-    if username in users and users[username] == password:
-        st.session_state['logged_in'] = True
-        st.session_state['username'] = username
-        st.success(f"Logged in as {username}")
-    else:
-        st.error("Invalid username or password")
 
 def logout():
     st.session_state['logged_in'] = False
@@ -50,7 +85,6 @@ def load_scaler_safe(scaler_path):
         st.warning(f"Scaler file not found: {scaler_path}")
         return None
 
-# Load models
 diabetes_model = load_model_safe(os.path.join(model_dir, "diabetes_model.h5"))
 diabetes_scaler = load_scaler_safe(os.path.join(model_dir, "diabetes_scaler.pkl"))
 
@@ -72,7 +106,6 @@ KIDNEY_FEATURES = [
     "Age", "BloodPressure", "SpecificGravity", "Albumin", "Sugar", "Bacteria"
 ]
 
-# Heart Disease: pick a few key features, rest will be default 0
 HEART_KEY_FEATURES = {
     0: "Age",
     1: "Sex (1=Male,0=Female)",
@@ -85,13 +118,35 @@ HEART_KEY_FEATURES = {
 # ---------------------------
 st.title("🩺 AI-based Medical Diagnosis System")
 
+menu = ["Login", "Register"]
+choice = st.sidebar.selectbox("Menu", menu)
+
+# ---------- REGISTER PAGE ----------
+if choice == "Register":
+    st.subheader("Create a New Account")
+    new_user = st.text_input("Username")
+    new_password = st.text_input("Password", type="password")
+    confirm_password = st.text_input("Confirm Password", type="password")
+    if st.button("Register"):
+        if new_password != confirm_password:
+            st.error("Passwords do not match!")
+        elif create_user(new_user, new_password):
+            st.success("Account created successfully! You can now login.")
+        else:
+            st.error("Username already exists!")
+
 # ---------- LOGIN PAGE ----------
-if not st.session_state['logged_in']:
-    st.subheader("Doctor Login")
+elif choice == "Login":
+    st.subheader("Login to Your Account")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Login"):
-        login(username, password)
+        if authenticate_user(username, password):
+            st.session_state['logged_in'] = True
+            st.session_state['username'] = username
+            st.success(f"Logged in as {username}")
+        else:
+            st.error("Invalid username or password")
 
 # ---------- PREDICTION PAGE ----------
 if st.session_state['logged_in']:
@@ -123,23 +178,12 @@ if st.session_state['logged_in']:
         total_features = kidney_scaler.n_features_in_
         with st.form("kidney_form"):
             st.write("Enter patient details for Kidney Disease prediction:")
-
             inputs_array = np.zeros(total_features)
-            key_features_idx = {
-                0: "Age",
-                1: "BloodPressure",
-                2: "SpecificGravity",
-                3: "Albumin",
-                4: "Sugar",
-                5: "Bacteria"
-            }
+            key_features_idx = {0:"Age",1:"BloodPressure",2:"SpecificGravity",3:"Albumin",4:"Sugar",5:"Bacteria"}
             for idx, fname in key_features_idx.items():
                 val = st.number_input(fname, value=0.0)
                 inputs_array[idx] = val
-
-        # Submit button INSIDE the form
             submit = st.form_submit_button("Predict Kidney Disease")
-
             if submit:
                 inputs_array = inputs_array.reshape(1, -1)
                 inputs_scaled = kidney_scaler.transform(inputs_array)
@@ -152,13 +196,10 @@ if st.session_state['logged_in']:
         total_features = heart_scaler.n_features_in_
         with st.form("heart_form"):
             st.write("Enter key patient details for Heart Disease prediction:")
-            inputs_array = np.zeros(total_features)  # fill all zeros
-
-            # Take input only for key features
+            inputs_array = np.zeros(total_features)
             for idx, fname in HEART_KEY_FEATURES.items():
                 val = st.number_input(fname, value=0.0)
                 inputs_array[idx] = val
-
             submit = st.form_submit_button("Predict Heart Disease")
             if submit:
                 inputs_array = inputs_array.reshape(1, -1)

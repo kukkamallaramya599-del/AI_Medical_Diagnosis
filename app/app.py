@@ -1,37 +1,89 @@
 import streamlit as st
-import tensorflow as tf
-import joblib
-import numpy as np
+import sqlite3
+import hashlib
+import os
 
-# ✅ Load ANN model & scaler (from models/ folder inside project root)
-model = tf.keras.models.load_model("models/ann_model.h5")
-scaler = joblib.load("models/scaler.pkl")
+# --- DATABASE SETUP ---
+DB_PATH = os.path.join(os.path.dirname(__file__), "users.db")
 
-st.title("🩺 AI-based Medical Diagnosis System")
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL
+    )
+    ''')
+    conn.commit()
+    conn.close()
 
-# Example input fields (for Diabetes dataset)
-preg = st.number_input("Pregnancies", 0, 20, 1)
-glucose = st.number_input("Glucose", 0, 200, 120)
-bp = st.number_input("Blood Pressure", 0, 150, 70)
-skin = st.number_input("Skin Thickness", 0, 100, 20)
-insulin = st.number_input("Insulin", 0, 900, 80)
-bmi = st.number_input("BMI", 0.0, 70.0, 25.0)
-dpf = st.number_input("Diabetes Pedigree Function", 0.0, 3.0, 0.5)
-age = st.number_input("Age", 1, 120, 30)
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
 
-if st.button("Predict"):
-    # Create input array
-    X = np.array([[preg, glucose, bp, skin, insulin, bmi, dpf, age]])
+def create_user(username, password):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO users (username, password) VALUES (?, ?)", 
+                  (username, hash_password(password)))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False  # Username already exists
+    finally:
+        conn.close()
+
+def authenticate_user(username, password):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT password FROM users WHERE username = ?", (username,))
+    data = c.fetchone()
+    conn.close()
+    if data and data[0] == hash_password(password):
+        return True
+    return False
+
+# Initialize database
+init_db()
+
+# --- STREAMLIT APP ---
+st.title("AI Medical Diagnosis System")
+
+menu = ["Login", "Register"]
+choice = st.sidebar.selectbox("Menu", menu)
+
+if choice == "Register":
+    st.subheader("Create a New Account")
+    new_user = st.text_input("Username")
+    new_password = st.text_input("Password", type='password')
+    confirm_password = st.text_input("Confirm Password", type='password')
     
-    # Scale features using the saved scaler
-    X = scaler.transform(X)
-    
-    # Make prediction
-    prob = model.predict(X)[0][0]
-    st.write(f"Prediction Probability: {prob:.2f}")
-    
-    if prob > 0.5:
-        st.error("⚠️ High Risk of Diabetes")
-    else:
-        st.success("✅ Low Risk of Diabetes")
+    if st.button("Register"):
+        if new_password != confirm_password:
+            st.error("Passwords do not match!")
+        elif create_user(new_user, new_password):
+            st.success("Account created successfully! You can now login.")
+        else:
+            st.error("Username already exists!")
 
+elif choice == "Login":
+    st.subheader("Login to Your Account")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type='password')
+    
+    if st.button("Login"):
+        if authenticate_user(username, password):
+            st.success(f"Welcome {username}!")
+            st.info("You can now use the AI Medical Diagnosis system.")
+
+            # --- Call your AI diagnosis function here ---
+            try:
+                from AI_Medical_Diagnosis.ai_diagnosis_code import run_diagnosis
+                run_diagnosis()  # replace with your function name
+            except Exception as e:
+                st.error("AI diagnosis system not found. Check import path.")
+                st.error(str(e))
+        else:
+            st.error("Invalid username or password")
